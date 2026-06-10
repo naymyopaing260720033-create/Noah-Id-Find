@@ -1,7 +1,7 @@
 import os
 import asyncio
 from flask import Flask, request
-from telegram import Update, Bot, BotCommand
+from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 app = Flask(__name__)
@@ -12,6 +12,9 @@ TOKEN = os.getenv("BOT_TOKEN")
 # Application တည်ဆောက်ခြင်း
 telegram_app = Application.builder().token(TOKEN).build()
 
+# Bot ကို တစ်ကြိမ်ပဲ Initialize လုပ်ဖို့ သတ်မှတ်မည့် Variable
+is_initialized = False
+
 # --- ကုဒ်ထဲကနေ Telegram ဆီ Command List လှမ်းသတ်မှတ်မည့် Function ---
 async def set_bot_commands():
     try:
@@ -19,7 +22,6 @@ async def set_bot_commands():
             BotCommand("id", "မိမိ၏ Telegram ID နှင့် Bio အချက်အလက်များကို ကြည့်ရန်"),
             BotCommand("search", "တခြားသူ၏ Username ကို ရိုက်ရှာပြီး ID နှင့် Bio စစ်ဆေးရန်")
         ]
-        # Telegram Server ဆီ Menu commands list ကို လှမ်းပို့ပြီး သတ်မှတ်ခြင်း
         await telegram_app.bot.set_my_commands(commands)
         print("Bot commands successfully updated via code!")
     except Exception as e:
@@ -38,7 +40,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text=message, parse_mode="Markdown")
 
-# /id command (မိမိကိုယ်ပိုင် Info + Bio)
+# /id command
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
@@ -61,7 +63,7 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(text=message, parse_mode="Markdown")
 
-# /search @username command (တခြားသူကို ရှာဖွေခြင်း)
+# /search @username command
 async def search_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(text="⚠️ ကျေးဇူးပြု၍ ရှာချင်တဲ့ Username ကို တွဲရိုက်ပေးပါ။\nဥပမာ- `/search @durov`", parse_mode="Markdown")
@@ -97,7 +99,6 @@ async def search_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_forward(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     
-    # ၁။ Channel သို့မဟုတ် Group ကနေ Forward လုပ်လာလျှင်
     if msg.forward_from_chat:
         chat = msg.forward_from_chat
         chat_id = chat.id
@@ -120,7 +121,6 @@ async def handle_forward(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(text=response, parse_mode="Markdown")
         
-    # ၂။ လူပုဂ္ဂိုလ် (User) တစ်ဦးချင်းစီဆီက Forward လုပ်လာလျှင်
     elif msg.forward_from:
         fwd_user = msg.forward_from
         fwd_id = fwd_user.id
@@ -141,7 +141,6 @@ async def handle_forward(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(text=response, parse_mode="Markdown")
     
-    # ၃။ User က Forward Privacy ပိတ်ထားလျှင်
     elif msg.forward_sender_name:
         await update.message.reply_text(
             text=f"🔍 **Forward စစ်ဆေးမှု ရလဒ်**\n\n"
@@ -157,9 +156,10 @@ telegram_app.add_handler(CommandHandler("id", get_id))
 telegram_app.add_handler(CommandHandler("search", search_user))
 telegram_app.add_handler(MessageHandler(filters.FORWARDED, handle_forward))
 
-# Webhook Endpoint (ဒီနေရာမှာ Command List ကိုပါ တစ်ခါတည်း Initialize လုပ်သွားမှာပါ)
+# Webhook Endpoint (အဓိကပြင်ဆင်ထားသောနေရာ)
 @app.route('/', methods=['POST'])
 def webhook():
+    global is_initialized
     if request.method == "POST":
         try:
             loop = asyncio.new_event_loop()
@@ -168,22 +168,25 @@ def webhook():
             req_json = request.get_json(force=True)
             update = Update.de_json(req_json, telegram_app.bot)
             
-            # Application နှင့် Command များကို အလိုအလျောက် သတ်မှတ်ခြင်း
-            loop.run_until_complete(telegram_app.initialize())
-            loop.run_until_complete(set_bot_commands()) # <--- ဒီနေရာကနေ လှမ်းခေါ်သွားတာပါ
-            loop.run_until_complete(telegram_app.process_update(update))
+            # Bot ကို မပွင့်သေးရင် တစ်ကြိမ်သာ Initialize လုပ်ပြီး Menu Command တင်မည်
+            if not is_initialized:
+                loop.run_until_complete(telegram_app.initialize())
+                loop.run_until_complete(set_bot_commands())
+                is_initialized = True
             
+            # Update ကို Process လုပ်ခြင်း
+            loop.run_until_complete(telegram_app.process_update(update))
             return "OK", 200
         except Exception as e:
             print(f"Error occurred: {e}")
-            return "Internal Error", 500
+            return f"Internal Error: {e}", 500
             
     return "Invalid Request", 400
 
 @app.route('/', methods=['GET'])
 def index():
-    return "Advanced ID Finder Bot is running fine with Code-set Commands!", 200
+    return "Advanced ID Finder Bot is running fine!", 200
 
-# Vercel handler
-def handler(environ, start_response):
-    return app(environ, start_response)
+# WSGI Handler ပြင်ဆင်မှု
+handler = app
+           
